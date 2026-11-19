@@ -60,7 +60,8 @@ const DisplayProducts = ({ title, isLoading, error, products = [], onRetry }) =>
   return (
     <div>
       <h1 className="font-epilogue font-semibold text-[18px] text-white text-left">
-        {title} ({ongoingProducts.length})
+        {title}
+        {!isLoading && !error && ` (${ongoingProducts.length})`}
       </h1>
 
       <div className="flex flex-wrap mt-[20px] gap-[26px]">

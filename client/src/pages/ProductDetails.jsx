@@ -252,7 +252,7 @@ const ProductDetails = () => {
         </p>
         <Link
           to={listPath}
-          className="font-epilogue font-semibold text-[16px] text-[#8c6dfd] hover:text-[#00cec9]"
+          className="font-epilogue font-semibold text-[16px] leading-[26px] text-white px-4 py-3 rounded-lg bg-[#8c6dfd] hover:bg-[#00cec9] transition duration-500"
         >
           Back to products
         </Link>
@@ -283,7 +283,7 @@ const ProductDetails = () => {
           />
           <Countbox title="Reviews" value={product.reviewCount} />
           <Countbox title="Min Review" value={product.min_review_count} />
-          <div>
+          <div className="w-full min-w-0">
             <h4 className="font-epilogue font-semibold text-[18px] text-white mt-8">
               Product Details
             </h4>
@@ -310,14 +310,14 @@ const ProductDetails = () => {
               Description
             </h4>
 
-            <div className="mt-[20px] font-epilogue font-normal text-[16px] text-[#808191] leading-[26px] text-justify">
+            <div className="mt-[20px] font-epilogue font-normal text-[16px] text-[#808191] leading-[26px]">
               <p>{product.prod_Details}</p>
               <p>Status : {product.status}</p>
               <p>
                 Next Amt :{" "}
                 {(Number(product.nextAmount) / Math.pow(10, 18)).toFixed(4)} AVAX
               </p>
-              <p>Owner : {product.owner}</p>
+              <p className="break-all">Owner : {product.owner}</p>
             </div>
           </div>
         </div>
