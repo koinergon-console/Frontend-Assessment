@@ -1,106 +1,175 @@
 import { useState, useEffect, useCallback } from "react";
-import { useLocation } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import { Countbox, CustomButton, Loader } from "../components";
-import { thirdweb } from "../assets";
-import Web3 from "web3";
+import { loader, thirdweb } from "../assets";
 import axios from "axios";
-import MoneyDistribution from "../abi/MoneyDistribution.json";
 import { useStateAuth } from "../context/StateProvider";
+import { getProductById } from "../services/products";
 import { toast } from "react-toastify";
-const ProductDetails = () => {
-  const { state } = useLocation();
-  const [isLoading, setIsLoading] = useState(false);
-  const [isValidating, setIsValidating] = useState(false);
-  const [newReview, setNewReview] = useState({
-    name: "",
-    orderId: "",
-    description: "",
-    attachments: [],
-    questionAnswers: [],
+
+const emptyReview = {
+  name: "",
+  orderId: "",
+  description: "",
+  attachments: [],
+  questionAnswers: [],
+};
+
+const validateReview = (review, questions, isOrderIdTracking) => {
+  const errors = {};
+
+  if (!review.name.trim()) {
+    errors.name = "Please enter your name.";
+  }
+  if (isOrderIdTracking && !review.orderId.trim()) {
+    errors.orderId = "Please enter your order ID.";
+  }
+  if (!review.description.trim()) {
+    errors.description = "Please write a review.";
+  }
+  questions.forEach((question, index) => {
+    if (!review.questionAnswers[index]?.answer?.trim()) {
+      errors[`question-${index}`] = "Please answer this question.";
+    }
   });
-  const { userData } = useStateAuth();
-  const [reviews, setReviews] = useState([]);
+
+  return errors;
+};
+
+const FieldError = ({ message }) => {
+  if (!message) return null;
+  return (
+    <p className="mt-1 font-epilogue text-[14px] text-[#ff6b6b]">{message}</p>
+  );
+};
+
+const ProductDetails = () => {
+  const { id } = useParams();
+  const { pathname } = useLocation();
+  const { userData, state } = useStateAuth();
+
+  const [product, setProduct] = useState(null);
+  const [isProductLoading, setIsProductLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errors, setErrors] = useState({});
+  const [newReview, setNewReview] = useState(emptyReview);
+  const [reviews] = useState([]);
   const [questions, setQuestions] = useState([]);
   const [orderid, setorderid] = useState("null");
   const [isOrderIdTracking, setIsOrderIdTracking] = useState(false);
 
-  const fetchReviewsAndQuestions = useCallback(async () => {
-    const questionsResponse = await axios.get(
-      `https://critiqall-backend.onrender.com/api/form/questions/${state.id}`
-    );
-    console.log(questionsResponse);
-    setQuestions(questionsResponse.data.questions);
-    setIsOrderIdTracking(questionsResponse.data.isOrderIdTracking);
-  }, [state.id]);
+  const listPath = pathname.startsWith("/company") ? "/company" : "/home";
 
   useEffect(() => {
-    if (userData) fetchReviewsAndQuestions();
-  }, [userData, fetchReviewsAndQuestions]);
+    let ignore = false;
+
+    const loadProduct = async () => {
+      setIsProductLoading(true);
+      setLoadError("");
+      try {
+        const data = await getProductById(id);
+        if (!ignore) setProduct(data);
+      } catch (err) {
+        console.error(err);
+        if (!ignore) {
+          setProduct(null);
+          setLoadError("Something went wrong while loading this product.");
+        }
+      } finally {
+        if (!ignore) setIsProductLoading(false);
+      }
+    };
+
+    loadProduct();
+    return () => {
+      ignore = true;
+    };
+  }, [id]);
+
+  const fetchReviewsAndQuestions = useCallback(async () => {
+    try {
+      const questionsResponse = await axios.get(
+        `https://critiqall-backend.onrender.com/api/form/questions/${id}`
+      );
+      setQuestions(questionsResponse.data.questions ?? []);
+      setIsOrderIdTracking(Boolean(questionsResponse.data.isOrderIdTracking));
+    } catch (err) {
+      console.error(err);
+    }
+  }, [id]);
+
+  useEffect(() => {
+    if (userData && product) fetchReviewsAndQuestions();
+  }, [userData, product, fetchReviewsAndQuestions]);
 
   const handleReviewSubmit = async (e) => {
     e.preventDefault();
-    setIsValidating(true);
-    var forGemmacheck = [];
-    for (let i = 0; i < newReview.questionAnswers.length; i++) {
-      for (let j = 0; j < questions.length; j++) {
-        if (newReview.questionAnswers[i].question == questions[j].q) {
-          if (questions[j].type === "short") {
-            forGemmacheck.push({
-              question: questions[j].q,
-              answer: newReview.questionAnswers[i].answer,
-            });
-          }
-        }
-      }
-    }
-    console.log(forGemmacheck);
+    if (isSubmitting) return;
 
+    const formErrors = validateReview(newReview, questions, isOrderIdTracking);
+    setErrors(formErrors);
+    if (Object.keys(formErrors).length > 0) return;
+
+    setIsSubmitting(true);
     try {
-      const res = await axios.post("http://localhost:8000/validate-answer2", {
-        qna: forGemmacheck,
-      });
-      console.log("ACTUAL", res.data);
-      console.log(res.data.validation);
+      // only the short text answers go through the answer validation service
+      const shortAnswers = newReview.questionAnswers
+        .map((item, index) => ({ ...item, index }))
+        .filter(({ index }) => questions[index]?.type === "short");
 
-      const validationResponses = res.data.validation.split(" ,,,, ");
-      let isValid = true;
+      if (shortAnswers.length > 0) {
+        const validationRes = await axios.post(
+          "http://localhost:8000/validate-answer2",
+          {
+            qna: shortAnswers.map(({ question, answer }) => ({
+              question,
+              answer,
+            })),
+          }
+        );
 
-      for (const response of validationResponses) {
-        if (response.trim() === "no") {
-          alert("Answer not validated");
-          isValid = false;
-          break;
+        const answerErrors = {};
+        validationRes.data.validation.split(" ,,,, ").forEach((result, i) => {
+          if (result.trim() === "no" && shortAnswers[i]) {
+            answerErrors[`question-${shortAnswers[i].index}`] =
+              "This answer didn't pass validation. Please add more detail.";
+          }
+        });
+
+        if (Object.keys(answerErrors).length > 0) {
+          setErrors(answerErrors);
+          return;
         }
       }
 
-      if (isValid) {
-        setIsValidating(false);
-
-        // Proceed with further actions if all answers are validated
-        setIsLoading(true);
-
-        console.log(JSON.stringify(newReview));
-        const rev = JSON.stringify(newReview);
-        const res = await axios.post("https://critiqall-backend.onrender.com/customers/sendmoney", {
+      setIsLoading(true);
+      const rev = JSON.stringify(newReview);
+      const res = await axios.post(
+        "https://critiqall-backend.onrender.com/customers/sendmoney",
+        {
           key: userData.pkey,
-        });
-        console.log(res.data);
-        if (res.data.status == true) {
-          setNewReview({
-            name: "",
-            orderId: "",
-            description: "",
-            attachments: [],
-            questionAnswers: [],
-          });
-          await BsubmitReview(orderid, rev);
-          setIsLoading(false);
         }
-        console.log("All answers validated successfully");
+      );
+
+      if (res.data.status == true) {
+        setNewReview(emptyReview);
+        await BsubmitReview(orderid, rev);
+      } else {
+        setErrors({
+          form: "We couldn't process your review right now. Please try again.",
+        });
       }
     } catch (error) {
       console.error(error);
-      toast.error("An error occurred during validation");
+      setErrors({
+        form: "Something went wrong while submitting your review. Please try again.",
+      });
+    } finally {
+      setIsLoading(false);
+      setIsSubmitting(false);
     }
   };
 
@@ -113,6 +182,7 @@ const ProductDetails = () => {
       ...prevReview,
       [name]: value,
     }));
+    setErrors((prevErrors) => ({ ...prevErrors, [name]: undefined }));
   };
 
   const handleQuestionAnswerChange = (e, index) => {
@@ -128,43 +198,24 @@ const ProductDetails = () => {
         questionAnswers: newQuestionAnswers,
       };
     });
+    setErrors((prevErrors) => ({
+      ...prevErrors,
+      [`question-${index}`]: undefined,
+    }));
   };
   /////////////////////////////////////////////////
 
   const { ethereum } = window;
-  const [statee, setState] = useState({
-    web3: null,
-    contract: null,
-  });
-  useEffect(() => {
-    async function template() {
-      const web3 = new Web3(Web3.givenProvider || "ws://localhost:8545");
-      const networkId = await web3.eth.net.getId();
-      const deployedNetwork = MoneyDistribution.networks[networkId];
-      const contract = new web3.eth.Contract(
-        MoneyDistribution.abi,
-        deployedNetwork.address
-      );
-      console.log(contract);
-      setState({ web3: web3, contract: contract });
-    }
-    template();
-  }, []);
 
   const BsubmitReview = async (oid, rev) => {
-    console.log("S2");
-    console.log(oid, rev);
-    console.log(statee);
-    const { contract } = statee;
+    const { contract } = state;
     const accountss = await ethereum.request({
       method: "eth_requestAccounts",
     });
     try {
       // NewReview(string memory orderID, string memory prodID, string memory review)
-      const pid = state.id;
-      console.log(oid, pid, rev);
       const res = await contract.methods
-        .NewReview(oid.toString(), pid, rev)
+        .NewReview(oid.toString(), id, rev)
         .send({ from: accountss[0] });
 
       console.log(res);
@@ -177,6 +228,38 @@ const ProductDetails = () => {
   };
 
   ////////////////////////////////////////////////
+  if (isProductLoading) {
+    return (
+      <div className="flex justify-center mt-10">
+        <img
+          src={loader}
+          alt="Loading product"
+          className="w-[100px] h-[100px] object-contain"
+        />
+      </div>
+    );
+  }
+
+  if (!product) {
+    return (
+      <div className="mt-10 flex flex-col items-start gap-4">
+        <h2 className="font-epilogue font-semibold text-[20px] text-white">
+          {loadError ? "Couldn't load this product" : "Product not found"}
+        </h2>
+        <p className="font-epilogue text-[16px] text-[#808191]">
+          {loadError ||
+            "The product you're looking for doesn't exist or was removed."}
+        </p>
+        <Link
+          to={listPath}
+          className="font-epilogue font-semibold text-[16px] text-[#8c6dfd] hover:text-[#00cec9]"
+        >
+          Back to products
+        </Link>
+      </div>
+    );
+  }
+
   return (
     <div>
       {isLoading && <Loader />}
@@ -184,7 +267,7 @@ const ProductDetails = () => {
       <div className="w-full flex md:flex-row flex-col mt-10 gap-[30px]">
         <div className="flex-1 flex-col">
           <img
-            src={state.prodimg}
+            src={product.prodimg}
             alt="Product"
             className="w-full h-[410px] object-cover rounded-xl"
           />
@@ -196,10 +279,10 @@ const ProductDetails = () => {
         <div className="flex md:w-1/2 flex-wrap justify-between gap-[20px]">
           <Countbox
             title="Price"
-            value={(Number(state.amt) / Math.pow(10, 18)).toFixed(2) + " AVAX"}
+            value={(Number(product.amt) / Math.pow(10, 18)).toFixed(2) + " AVAX"}
           />
-          <Countbox title="Reviews" value={state.reviewCount} />
-          <Countbox title="Min Review" value={state.min_review_count} />
+          <Countbox title="Reviews" value={product.reviewCount} />
+          <Countbox title="Min Review" value={product.min_review_count} />
           <div>
             <h4 className="font-epilogue font-semibold text-[18px] text-white mt-8">
               Product Details
@@ -215,10 +298,10 @@ const ProductDetails = () => {
               </div>
               <div>
                 <h4 className="font-epilogue font-semibold text-[14px] text-white break-all">
-                  {state.name}
+                  {product.name}
                 </h4>
                 <p className="mt-[4px] font-epilogue font-medium text-[12px] text-[#808191]">
-                  {state.company_name}
+                  {product.company_name}
                 </p>
               </div>
             </div>
@@ -228,10 +311,13 @@ const ProductDetails = () => {
             </h4>
 
             <div className="mt-[20px] font-epilogue font-normal text-[16px] text-[#808191] leading-[26px] text-justify">
-              <p>{state.prod_Details}</p>
-              <p>Status : {state.status}</p>
-              <p>Next Amt : {state.next_Amount}</p>
-              <p>Owner : {state.owner}</p>
+              <p>{product.prod_Details}</p>
+              <p>Status : {product.status}</p>
+              <p>
+                Next Amt :{" "}
+                {(Number(product.nextAmount) / Math.pow(10, 18)).toFixed(4)} AVAX
+              </p>
+              <p>Owner : {product.owner}</p>
             </div>
           </div>
         </div>
@@ -277,7 +363,7 @@ const ProductDetails = () => {
             <p className="font-epilogue fount-medium text-[20px] leading-[30px] text-center text-[#808191]">
               Review the Product
             </p>
-            <form onSubmit={handleReviewSubmit} className="mt-4">
+            <form onSubmit={handleReviewSubmit} noValidate className="mt-4">
               <input
                 required
                 name="name"
@@ -287,6 +373,7 @@ const ProductDetails = () => {
                 value={newReview.name}
                 onChange={handleInputChange}
               />
+              <FieldError message={errors.name} />
               {isOrderIdTracking && (
                 <>
                   <input
@@ -298,6 +385,7 @@ const ProductDetails = () => {
                     value={newReview.orderId}
                     onChange={handleInputChange}
                   />
+                  <FieldError message={errors.orderId} />
                   <input
                     type="file"
                     name="attachments"
@@ -323,6 +411,7 @@ const ProductDetails = () => {
                 value={newReview.description}
                 onChange={handleInputChange}
               />
+              <FieldError message={errors.description} />
 
               <div className="my-[20px] p-4 bg-[#13131a] rounded-[10px]">
                 <h4 className="font-epilogue font-semibold text-[14px] leading-[22px] text-white">
@@ -371,15 +460,25 @@ const ProductDetails = () => {
                       </div>
                     ))
                   )}
+                  <FieldError message={errors[`question-${index}`]} />
                 </div>
               ))}
 
+              {errors.form && (
+                <p
+                  role="alert"
+                  className="mb-3 font-epilogue text-[14px] text-[#ff6b6b]"
+                >
+                  {errors.form}
+                </p>
+              )}
+
               <CustomButton
                 btnType="submit"
-                title="Submit"
+                title={isSubmitting ? "Submitting..." : "Submit"}
+                disabled={isSubmitting}
                 styles="w-full bg-[#8c6dfd] hover:bg-[#00cec9] transition duration-500"
               />
-              {isValidating && <>Validating Reviews...</>}
             </form>
           </div>
         </div>
