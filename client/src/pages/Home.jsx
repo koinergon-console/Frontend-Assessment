@@ -1,29 +1,39 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 
 import { DisplayProducts } from "../components";
-import { useStateAuth } from "../context/StateProvider";
+import { getProducts } from "../services/products";
+
 const Home = () => {
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState("");
   const [products, setProducts] = useState([]);
 
-  const { fetchProducts } = useStateAuth();
+  const loadProducts = useCallback(async () => {
+    setIsLoading(true);
+    setError("");
+    try {
+      const data = await getProducts();
+      setProducts(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error(err);
+      setProducts([]);
+      setError("Something went wrong while loading products.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    const getProducts = async () => {
-      setIsLoading(true);
-      const data = await fetchProducts();
-      if (data.length > 0) setProducts(data);
-
-      setIsLoading(false);
-    };
-    getProducts();
-  }, [fetchProducts]);
+    loadProducts();
+  }, [loadProducts]);
 
   return (
     <DisplayProducts
       title="All Products"
       isLoading={isLoading}
+      error={error}
       products={products}
+      onRetry={loadProducts}
     />
   );
 };
